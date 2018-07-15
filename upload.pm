@@ -133,13 +133,17 @@ sub handle_put_body {
             $r->log_error($!, "Cannot set binary mode for $file_path");
             return HTTP_INTERNAL_SERVER_ERROR;
         }
-        if ($r->request_body) {
-            if (not syswrite($fh, $r->request_body)) {
+
+        my $request_body = $r->request_body;
+        my $request_body_file = $r->request_body_file;
+
+        if ($request_body) {
+            if (not syswrite($fh, $request_body)) {
                 $r->log_error($!, "Cannot write $file_path");
                 return HTTP_INTERNAL_SERVER_ERROR;
             }
-        } elsif ($r->request_body_file) {
-            if (not move($r->request_body_file, $fh)) {
+        } elsif ($request_body_file) {
+            if (not move($request_body_file, $fh)) {
                 $r->log_error($!, "Cannot move data to $file_path");
                 return HTTP_INTERNAL_SERVER_ERROR;
             }
