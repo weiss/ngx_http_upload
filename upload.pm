@@ -128,51 +128,68 @@ sub handle_put_body {
         return HTTP_FORBIDDEN; # Assume EACCES.
     }
 
-    my $request_body = $r->request_body;
-    my $request_body_file = $r->request_body_file;
+    my $body = $r->request_body;
+    my $body_file = $r->request_body_file;
 
-    if ($request_body) {
-        if (sysopen(my $fh, $file_path, O_WRONLY|O_CREAT|O_EXCL, $file_mode)) {
-            if (not binmode($fh)) {
-                $r->log_error($!, "Cannot set binary mode for $file_path");
-                return HTTP_INTERNAL_SERVER_ERROR;
-            }
-            if (not syswrite($fh, $request_body)) {
-                $r->log_error($!, "Cannot write $file_path");
-                return HTTP_INTERNAL_SERVER_ERROR;
-            }
-            if (not close($fh)) {
-                $r->log_error($!, "Cannot close $file_path");
-                return HTTP_INTERNAL_SERVER_ERROR;
-            }
-        } elsif ($!{EEXIST}) {
-            $r->log_error($!, "Won't overwrite $file_path");
-            return HTTP_CONFLICT;
-        } elsif ($!{EACCES}) {
-            $r->log_error($!, "Cannot create $file_path");
-            return HTTP_FORBIDDEN;
-        } else {
-            $r->log_error($!, "Cannot open $file_path");
-            return HTTP_INTERNAL_SERVER_ERROR;
-        }
-    } elsif ($request_body_file) {
-        # We could hand over the file handle created by the above sysopen() as
-        # the second argument to move(), but we want to let move() use rename()
-        # if possible.
-        if (-e $file_path) {
-            $r->log_error(0, "Won't overwrite $file_path");
-            return HTTP_CONFLICT;
-        }
-        if (not move($request_body_file, $file_path)) {
-            $r->log_error($!, "Cannot move data to $file_path");
-            return HTTP_INTERNAL_SERVER_ERROR;
-        }
+    if ($body) {
+        return store_body_from_buffer($r, $body, $file_path, $file_mode);
+    } elsif ($body_file) {
+        return store_body_from_file($r, $body_file, $file_path, $file_mode);
     } else { # Huh?
         $r->log_error(0, "Got no data to write to $file_path");
         return HTTP_BAD_REQUEST;
     }
-    if (chmod($file_mode, $file_path) < 1) {
-        $r->log_error($!, "Cannot change permissions of $file_path");
+}
+
+sub store_body_from_buffer {
+    my ($r, $body, $dst_path, $mode) = @_;
+
+    if (sysopen(my $fh, $dst_path, O_WRONLY|O_CREAT|O_EXCL, $mode)) {
+        if (not binmode($fh)) {
+            $r->log_error($!, "Cannot set binary mode for $dst_path");
+            return HTTP_INTERNAL_SERVER_ERROR;
+        }
+        if (not syswrite($fh, $body)) {
+            $r->log_error($!, "Cannot write $dst_path");
+            return HTTP_INTERNAL_SERVER_ERROR;
+        }
+        if (not close($fh)) {
+            $r->log_error($!, "Cannot close $dst_path");
+            return HTTP_INTERNAL_SERVER_ERROR;
+        }
+    } elsif ($!{EEXIST}) {
+        $r->log_error($!, "Won't overwrite $dst_path");
+        return HTTP_CONFLICT;
+    } elsif ($!{EACCES}) {
+        $r->log_error($!, "Cannot create $dst_path");
+        return HTTP_FORBIDDEN;
+    } else {
+        $r->log_error($!, "Cannot open $dst_path");
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+    if (chmod($mode, $dst_path) < 1) {
+        $r->log_error($!, "Cannot change permissions of $dst_path");
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+    return HTTP_CREATED;
+}
+
+sub store_body_from_file {
+    my ($r, $src_path, $dst_path, $mode) = @_;
+
+    # We could merge this with the store_body_from_buffer() code by handing over
+    # the file handle created by sysopen() as the second argument to move(), but
+    # we want to let move() use rename() if possible.
+    if (-e $dst_path) {
+        $r->log_error(0, "Won't overwrite $dst_path");
+        return HTTP_CONFLICT;
+    }
+    if (not move($src_path, $dst_path)) {
+        $r->log_error($!, "Cannot move data to $dst_path");
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+    if (chmod($mode, $dst_path) < 1) {
+        $r->log_error($!, "Cannot change permissions of $dst_path");
         return HTTP_INTERNAL_SERVER_ERROR;
     }
     return HTTP_CREATED;
