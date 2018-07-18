@@ -1,5 +1,6 @@
-# See: https://modules.prosody.im/mod_http_upload_external.html
-#
+# Nginx module to handle file uploads and downloads for ejabberd's
+# mod_http_upload or Prosody's mod_http_upload_external.
+
 # Copyright 2018 Holger Weiss <holger@zedat.fu-berlin.de>
 #
 # Permission to use, copy, modify, and/or distribute this software for any
@@ -16,43 +17,12 @@
 
 package upload;
 
-#### INSTALLATION
-
-# 1) Create a directory and move this module into it, e.g., /usr/local/lib/perl.
-#
-# 2) Install ngx_http_perl_module (on Debian/Ubuntu: libnginx-mod-http-perl).
-#
-# 3) Add the following snippets to the appropriate sections of your Nginx
-#    configuration (the "load_module" directive might've been added by a
-#    distribution package already):
-#
-#    load_module modules/ngx_http_perl_module.so;
-#    http {
-#        # [...]
-#        perl_modules /usr/local/lib/perl;
-#        perl_require upload.pm;
-#    }
-#    server {
-#        # [...]
-#        location / {
-#            perl upload::handle;
-#        }
-#    }
-#
-# 4) Adjust the configuration below. Notes:
-#
-#    - The $external_secret must match the one specified in your XMPP server's
-#      upload module configuration.
-#    - If the root path of the upload URIs (i.e., the "location" specified in
-#      Nginx) isn't "/" but "/some/prefix/", $uri_prefix_components must be set
-#      to the number of directory levels; for "/some/prefix/", it would be 2.
-
-#### CONFIGURATION
+## CONFIGURATION -----------------------------------------------------
 
 my $external_secret = 'it-is-secret';
+my $uri_prefix_components = 0;
 my $file_mode = 0640;
 my $dir_mode  = 0750;
-my $uri_prefix_components = 0;
 my %custom_headers = (
     'Access-Control-Allow-Origin' => '*',
     'Access-Control-Allow-Methods' => 'OPTIONS, HEAD, GET, PUT',
@@ -60,7 +30,7 @@ my %custom_headers = (
     'Access-Control-Allow-Credentials' => 'true',
 );
 
-#### END OF CONFIGURATION
+## END OF CONFIGURATION ----------------------------------------------
 
 use warnings;
 use strict;
