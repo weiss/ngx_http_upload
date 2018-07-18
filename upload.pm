@@ -38,8 +38,8 @@ package upload;
 #### CONFIGURATION
 
 my $external_secret = 'it-is-secret';
-my $file_mode = 0640; # Modified by "umask".
-my $dir_mode  = 0750; # Modified by "umask".
+my $file_mode = 0640;
+my $dir_mode  = 0750;
 my $uri_prefix_components = 0;
 my %custom_headers = (
     'Access-Control-Allow-Origin' => '*',
@@ -122,7 +122,7 @@ sub handle_put_body {
     my $file_path = substr($r->filename, 0, -length($r->uri)) . $safe_uri;
     my $dir_path = dirname($file_path);
 
-    make_path($dir_path, {mode => $dir_mode, error => \my $error});
+    make_path($dir_path, {chmod => $dir_mode, error => \my $error});
     if (@$error) {
         $r->log_error($!, "Cannot create directory $dir_path");
         return HTTP_FORBIDDEN; # Assume EACCES.
@@ -167,13 +167,13 @@ sub handle_put_body {
             $r->log_error($!, "Cannot move data to $file_path");
             return HTTP_INTERNAL_SERVER_ERROR;
         }
-        if (chmod($file_mode, $file_path) < 1) {
-            $r->log_error($!, "Cannot change permissions of $file_path");
-            return HTTP_INTERNAL_SERVER_ERROR;
-        }
     } else { # Huh?
         $r->log_error(0, "Got no data to write to $file_path");
         return HTTP_BAD_REQUEST;
+    }
+    if (chmod($file_mode, $file_path) < 1) {
+        $r->log_error($!, "Cannot change permissions of $file_path");
+        return HTTP_INTERNAL_SERVER_ERROR;
     }
     return HTTP_CREATED;
 }
