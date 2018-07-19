@@ -99,8 +99,7 @@ sub handle_put_body {
 
     make_path($dir_path, {chmod => $dir_mode, error => \my $error});
     if (@$error) {
-        $r->log_error($!, "Cannot create directory $dir_path");
-        return HTTP_FORBIDDEN; # Assume EACCES.
+        return system_error($r, "Cannot create directory $dir_path");
     }
 
     my $body = $r->request_body;
@@ -121,30 +120,19 @@ sub store_body_from_buffer {
 
     if (sysopen(my $fh, $dst_path, O_WRONLY|O_CREAT|O_EXCL, $mode)) {
         if (not binmode($fh)) {
-            $r->log_error($!, "Cannot set binary mode for $dst_path");
-            return HTTP_INTERNAL_SERVER_ERROR;
+            return system_error($r, "Cannot set binary mode for $dst_path");
         }
         if (not syswrite($fh, $body)) {
-            $r->log_error($!, "Cannot write $dst_path");
-            return HTTP_INTERNAL_SERVER_ERROR;
+            return system_error($r, "Cannot write $dst_path");
         }
         if (not close($fh)) {
-            $r->log_error($!, "Cannot close $dst_path");
-            return HTTP_INTERNAL_SERVER_ERROR;
+            return system_error($r, "Cannot close $dst_path");
         }
-    } elsif ($!{EEXIST}) {
-        $r->log_error($!, "Won't overwrite $dst_path");
-        return HTTP_CONFLICT;
-    } elsif ($!{EACCES}) {
-        $r->log_error($!, "Cannot create $dst_path");
-        return HTTP_FORBIDDEN;
     } else {
-        $r->log_error($!, "Cannot open $dst_path");
-        return HTTP_INTERNAL_SERVER_ERROR;
+        return system_error($r, "Cannot create $dst_path");
     }
-    if (chmod($mode, $dst_path) < 1) {
-        $r->log_error($!, "Cannot change permissions of $dst_path");
-        return HTTP_INTERNAL_SERVER_ERROR;
+    if (chmod($mode, $dst_path) != 1) {
+        return system_error($r, "Cannot change permissions of $dst_path");
     }
     return HTTP_CREATED;
 }
@@ -155,17 +143,16 @@ sub store_body_from_file {
     # We could merge this with the store_body_from_buffer() code by handing over
     # the file handle created by sysopen() as the second argument to move(), but
     # we want to let move() use rename() if possible.
+
     if (-e $dst_path) {
         $r->log_error(0, "Won't overwrite $dst_path");
         return HTTP_CONFLICT;
     }
     if (not move($src_path, $dst_path)) {
-        $r->log_error($!, "Cannot move data to $dst_path");
-        return HTTP_INTERNAL_SERVER_ERROR;
+        return system_error($r, "Cannot move data to $dst_path");
     }
-    if (chmod($mode, $dst_path) < 1) {
-        $r->log_error($!, "Cannot change permissions of $dst_path");
-        return HTTP_INTERNAL_SERVER_ERROR;
+    if (chmod($mode, $dst_path) != 1) {
+        return system_error($r, "Cannot change permissions of $dst_path");
     }
     return HTTP_CREATED;
 }
@@ -195,6 +182,16 @@ sub safe_eq {
     croak('safe_eq arguments differ in length') if length($b) != $n;
     $r |= ord(substr($a, $_)) ^ ord(substr($b, $_)) for 0 .. $n - 1;
     return $r == 0;
+}
+
+sub system_error {
+    my ($r, $msg) = @_;
+
+    $r->log_error($!, $msg);
+
+    return HTTP_FORBIDDEN if $!{EACCES};
+    return HTTP_CONFLICT if $!{EEXIST};
+    return HTTP_INTERNAL_SERVER_ERROR;
 }
 
 1;
