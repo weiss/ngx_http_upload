@@ -36,7 +36,10 @@ Nginx setup
         # Specify directives such as "listen", "server_name", and TLS-related
         # settings for the "server" that handles the uploads.
 
-        # Uploaded files will be stored below this directory:
+        # Uploaded files will be stored below the "root" directory. To minimize
+        # disk I/O, make sure the specified path is on the same file system as
+        # the directory used by Nginx to store temporary files holding request
+        # bodies ("client_body_temp_path", often some directory below /var).
         root /var/www/upload;
 
         # Specify this "location" block (if you don't use "/", see below):
