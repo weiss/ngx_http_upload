@@ -12,7 +12,7 @@ Nginx setup
 
     ```sh
     # mkdir -p /usr/local/lib/perl
-    # wget -P /usr/local/lib/perl https://git.io/fNZgL
+    # wget -O /usr/local/lib/perl/upload.pm https://git.io/fNZgL
     ```
 
 2. Install the [`ngx_http_perl_module`][5]. On Debian/Ubuntu-based
