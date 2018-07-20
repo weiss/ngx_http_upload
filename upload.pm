@@ -64,6 +64,7 @@ sub handle_get_or_head {
     my $file_path = safe_filename($r);
 
     if (-r $file_path and -f _) {
+        $r->header_out('Content-Length', -s _);
         $r->allow_ranges;
         $r->send_http_header;
         $r->sendfile($file_path) unless $r->header_only;
