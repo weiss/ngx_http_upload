@@ -61,11 +61,12 @@ sub handle {
 
 sub handle_get_or_head {
     my $r = shift;
+    my $file_path = safe_filename($r);
 
-    if (-r $r->filename and -f _) {
+    if (-r $file_path and -f _) {
         $r->allow_ranges;
         $r->send_http_header;
-        $r->sendfile($r->filename) unless $r->header_only;
+        $r->sendfile($file_path) unless $r->header_only;
         return OK;
     } else {
         return DECLINED;
@@ -100,8 +101,7 @@ sub handle_put {
 
 sub handle_put_body {
     my $r = shift;
-    my $safe_uri = $r->uri =~ s|[^\p{Alnum}/_.-]|_|gr;
-    my $file_path = substr($r->filename, 0, -length($r->uri)) . $safe_uri;
+    my $file_path = safe_filename($r);
     my $dir_path = dirname($file_path);
 
     make_path($dir_path, {chmod => $dir_mode, error => \my $error});
@@ -178,6 +178,13 @@ sub add_custom_headers {
     while (my ($field, $value) = each(%custom_headers)) {
         $r->header_out($field, $value);
     }
+}
+
+sub safe_filename {
+    my $r = shift;
+    my $safe_uri = $r->uri =~ s|[^\p{Alnum}/_.-]|_|gr;
+
+    return substr($r->filename, 0, -length($r->uri)) . $safe_uri;
 }
 
 sub safe_eq {
