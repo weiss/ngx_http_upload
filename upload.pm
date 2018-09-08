@@ -26,7 +26,7 @@ my $dir_mode  = 0750;
 my %custom_headers = (
     'Access-Control-Allow-Origin' => '*',
     'Access-Control-Allow-Methods' => 'OPTIONS, HEAD, GET, PUT',
-    'Access-Control-Allow-Headers' => 'Authorization',
+    'Access-Control-Allow-Headers' => 'Authorization, Content-Type',
     'Access-Control-Allow-Credentials' => 'true',
 );
 
