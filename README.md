@@ -18,6 +18,7 @@ Nginx setup
 2. Install the [`ngx_http_perl_module`][5]. On Debian/Ubuntu-based
    distributions, the package is called `libnginx-mod-http-perl`, on
    RedHat/CentOS-based distributions, it's `nginx-mod-http-perl`.
+   If you're using Docker, make sure you use the image ending in `-perl`.
 
 3. Add the following snippets to the appropriate sections of your Nginx
    configuration:
