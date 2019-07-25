@@ -36,6 +36,7 @@ use warnings;
 use strict;
 use Carp;
 use Digest::SHA qw(hmac_sha256_hex);
+use Encode qw(decode :fallback_all);
 use Errno qw(:POSIX);
 use Fcntl;
 use File::Copy;
@@ -183,9 +184,11 @@ sub add_custom_headers {
 
 sub safe_filename {
     my $r = shift;
-    my $safe_uri = $r->uri =~ s|[^\p{Alnum}/_.-]|_|gr;
+    my $filename = decode('UTF-8', $r->filename, FB_DEFAULT | LEAVE_SRC);
+    my $uri = decode('UTF-8', $r->uri, FB_DEFAULT | LEAVE_SRC);
+    my $safe_uri = $uri =~ s|[^\p{Alnum}/_.-]|_|gr;
 
-    return substr($r->filename, 0, -length($r->uri)) . $safe_uri;
+    return substr($filename, 0, -length($uri)) . $safe_uri;
 }
 
 sub safe_eq {
