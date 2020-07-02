@@ -81,7 +81,7 @@ sub handle_put {
     my $uri = $r->uri =~ s|(?:/[^/]+){$uri_prefix_components}/||r;
     my $provided_hmac;
 
-    if ($r->args =~ /v=([[:xdigit:]]{64})/) {
+    if (defined($r->args) and $r->args =~ /v=([[:xdigit:]]{64})/) {
         $provided_hmac = $1;
     } else {
         $r->log_error(0, 'Rejecting upload: No auth token provided');
