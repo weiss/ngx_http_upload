@@ -1,0 +1,440 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: xmpp
+---
+### should be adjusted also in according to actual needs
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: httpupload
+  namespace: xmpp
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 20Gi
+
+---
+### should be adjusted also in according to actual needs
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: httpuploadexamplecom
+  namespace: xmpp
+spec:
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+  duration: 2160h # 90d
+  renewBefore: 360h # 15d
+  privateKey:
+    algorithm: RSA
+    encoding: PKCS1
+    size: 4096
+    rotationPolicy: Always
+  secretName: httpuploadexamplecom
+  dnsNames:
+  - 'http.upload.example.com'
+
+---
+### should be adjusted also in according to actual needs
+apiVersion: traefik.containo.us/v1alpha1
+kind: IngressRoute
+metadata:
+  name: httpupload
+  namespace: xmpp
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: "Host(`http.upload.example.com`)"
+      kind: Rule
+      services:
+        - name: httpupload
+          port: 80
+      middlewares:
+        - name: ratelimit
+          namespace: default
+        - name: https-redirectscheme
+          namespace: default
+  tls:
+    secretName: httpuploadexamplecom # certificate name created with cert-manager
+    options:
+
+---
+### should be adjusted also in according to actual needs
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: httpupload-config
+  namespace: xmpp
+data:
+  nginx.conf: |
+    worker_processes  auto;
+
+    load_module modules/ngx_http_perl_module.so;
+
+    error_log  /var/log/nginx/error.log notice;
+    pid        /nginx/nginx.pid;
+
+    events {
+        worker_connections  1024;
+    }
+
+    http {
+        client_body_temp_path /nginx/client_temp;
+        proxy_temp_path       /nginx/proxy_temp_path;
+        fastcgi_temp_path     /nginx/fastcgi_temp;
+        uwsgi_temp_path       /nginx/uwsgi_temp;
+        scgi_temp_path        /nginx/scgi_temp;
+
+        include       /etc/nginx/mime.types;
+        default_type  application/octet-stream;
+
+        log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
+                          '$status $body_bytes_sent "$http_referer" '
+                          '"$http_user_agent" "$http_x_forwarded_for"';
+
+        access_log  /var/log/nginx/access.log  main;
+
+        #perl_modules /usr/local/lib/perl5/site_perl; # Path to upload.pm.
+        perl_require upload.pm;
+
+        sendfile        on;
+        #tcp_nopush     on;
+
+        keepalive_timeout  65;
+
+        #gzip  on;
+
+        include /etc/nginx/conf.d/*.conf;
+    }
+  default.conf: |
+    server {
+            listen 8080;
+            root /http-upload;
+
+            fastcgi_buffers 64 4K;
+            fastcgi_hide_header X-Powered-By;
+            large_client_header_buffers 4 16k;
+
+            location / {
+                perl upload::handle;
+            }
+
+            client_max_body_size 100m;
+    }
+  upload.pm: |
+    # Nginx module to handle file uploads and downloads for ejabberd's
+    # mod_http_upload or Prosody's mod_http_upload_external.
+
+    # Copyright (c) 2018 Holger Weiss <holger@zedat.fu-berlin.de>
+    #
+    # Permission to use, copy, modify, and/or distribute this software for any
+    # purpose with or without fee is hereby granted, provided that the above
+    # copyright notice and this permission notice appear in all copies.
+    #
+    # THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+    # REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
+    # AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+    # INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+    # LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
+    # OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+    # PERFORMANCE OF THIS SOFTWARE.
+
+    package upload;
+
+    ## CONFIGURATION -----------------------------------------------------
+
+    my $external_secret = 'it-is-secret';
+    my $uri_prefix_components = 0;
+    my $file_mode = 0640;
+    my $dir_mode  = 0750;
+    my %custom_headers = (
+        'Access-Control-Allow-Origin' => '*',
+        'Access-Control-Allow-Methods' => 'OPTIONS, HEAD, GET, PUT',
+        'Access-Control-Allow-Headers' => 'Authorization, Content-Type',
+        'Access-Control-Allow-Credentials' => 'true',
+    );
+
+    ## END OF CONFIGURATION ----------------------------------------------
+
+    use warnings;
+    use strict;
+    use Carp;
+    use Digest::SHA qw(hmac_sha256_hex);
+    use Encode qw(decode :fallback_all);
+    use Errno qw(:POSIX);
+    use Fcntl;
+    use File::Copy;
+    use File::Basename;
+    use File::Path qw(make_path);
+    use nginx;
+
+    sub handle {
+        my $r = shift;
+
+        add_custom_headers($r);
+
+        if ($r->request_method eq 'GET' or $r->request_method eq 'HEAD') {
+            return handle_get_or_head($r);
+        } elsif ($r->request_method eq 'PUT') {
+            return handle_put($r);
+        } elsif ($r->request_method eq 'OPTIONS') {
+            return handle_options($r);
+        } else {
+            return DECLINED;
+        }
+    }
+
+    sub handle_get_or_head {
+        my $r = shift;
+        my $file_path = safe_filename($r);
+
+        if (-r $file_path and -f _) {
+            $r->header_out('Content-Length', -s _);
+            $r->allow_ranges;
+            $r->send_http_header;
+            $r->sendfile($file_path) unless $r->header_only;
+            return OK;
+        } else {
+            return DECLINED;
+        }
+    }
+
+    sub handle_put {
+        my $r = shift;
+        my $len = $r->header_in('Content-Length') or return HTTP_LENGTH_REQUIRED;
+        my $uri = $r->uri =~ s|(?:/[^/]+){$uri_prefix_components}/||r;
+        my $provided_hmac;
+
+        if (defined($r->args) and $r->args =~ /v=([[:xdigit:]]{64})/) {
+            $provided_hmac = $1;
+        } else {
+            $r->log_error(0, 'Rejecting upload: No auth token provided');
+            return HTTP_FORBIDDEN;
+        }
+
+        my $expected_hmac = hmac_sha256_hex("$uri $len", $external_secret);
+
+        if (not safe_eq(lc($provided_hmac), lc($expected_hmac))) {
+            $r->log_error(0, 'Rejecting upload: Invalid auth token');
+            return HTTP_FORBIDDEN;
+        }
+        if (not $r->has_request_body(\&handle_put_body)) {
+            $r->log_error(0, 'Rejecting upload: No data provided');
+            return HTTP_BAD_REQUEST;
+        }
+        return OK;
+    }
+
+    sub handle_put_body {
+        my $r = shift;
+        my $file_path = safe_filename($r);
+        my $dir_path = dirname($file_path);
+
+        make_path($dir_path, {chmod => $dir_mode, error => \my $error});
+        if (@$error) {
+            return system_error($r, "Cannot create directory $dir_path");
+        }
+
+        my $body = $r->request_body;
+        my $body_file = $r->request_body_file;
+
+        if ($body) {
+            return store_body_from_buffer($r, $body, $file_path, $file_mode);
+        } elsif ($body_file) {
+            return store_body_from_file($r, $body_file, $file_path, $file_mode);
+        } else { # Huh?
+            $r->log_error(0, "Got no data to write to $file_path");
+            return HTTP_BAD_REQUEST;
+        }
+    }
+
+    sub store_body_from_buffer {
+        my ($r, $body, $dst_path, $mode) = @_;
+
+        if (sysopen(my $fh, $dst_path, O_WRONLY|O_CREAT|O_EXCL, $mode)) {
+            if (not binmode($fh)) {
+                return system_error($r, "Cannot set binary mode for $dst_path");
+            }
+            if (not syswrite($fh, $body)) {
+                return system_error($r, "Cannot write $dst_path");
+            }
+            if (not close($fh)) {
+                return system_error($r, "Cannot close $dst_path");
+            }
+        } else {
+            return system_error($r, "Cannot create $dst_path");
+        }
+        if (chmod($mode, $dst_path) != 1) {
+            return system_error($r, "Cannot change permissions of $dst_path");
+        }
+        return HTTP_CREATED;
+    }
+
+    sub store_body_from_file {
+        my ($r, $src_path, $dst_path, $mode) = @_;
+
+        # We could merge this with the store_body_from_buffer() code by handing over
+        # the file handle created by sysopen() as the second argument to move(), but
+        # we want to let move() use rename() if possible.
+
+        if (-e $dst_path) {
+            $r->log_error(0, "Won't overwrite $dst_path");
+            return HTTP_CONFLICT;
+        }
+        if (not move($src_path, $dst_path)) {
+            return system_error($r, "Cannot move data to $dst_path");
+        }
+        if (chmod($mode, $dst_path) != 1) {
+            return system_error($r, "Cannot change permissions of $dst_path");
+        }
+        return HTTP_CREATED;
+    }
+
+    sub handle_options {
+        my $r = shift;
+
+        $r->header_out('Allow', 'OPTIONS, HEAD, GET, PUT');
+        $r->send_http_header;
+        return OK;
+    }
+
+    sub add_custom_headers {
+        my $r = shift;
+
+        while (my ($field, $value) = each(%custom_headers)) {
+            $r->header_out($field, $value);
+        }
+    }
+
+    sub safe_filename {
+        my $r = shift;
+        my $filename = decode('UTF-8', $r->filename, FB_DEFAULT | LEAVE_SRC);
+        my $uri = decode('UTF-8', $r->uri, FB_DEFAULT | LEAVE_SRC);
+        my $safe_uri = $uri =~ s|[^\p{Alnum}/_.-]|_|gr;
+
+        return substr($filename, 0, -length($uri)) . $safe_uri;
+    }
+
+    sub safe_eq {
+        my $a = shift;
+        my $b = shift;
+        my $n = length($a);
+        my $r = 0;
+
+        croak('safe_eq arguments differ in length') if length($b) != $n;
+        $r |= ord(substr($a, $_)) ^ ord(substr($b, $_)) for 0 .. $n - 1;
+        return $r == 0;
+    }
+
+    sub system_error {
+        my ($r, $msg) = @_;
+
+        $r->log_error($!, $msg);
+
+        return HTTP_FORBIDDEN if $!{EACCES};
+        return HTTP_CONFLICT if $!{EEXIST};
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    1;
+    __END__
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: httpupload
+  namespace: xmpp
+  labels:
+    app: httpupload
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: httpupload
+  template:
+    metadata:
+      labels:
+        app: httpupload
+    spec:
+#      imagePullSecrets:
+#      - name: privateregistry2
+      subdomain: httpupload
+#      hostNetwork: true
+      securityContext:
+        runAsUser: 101
+        runAsGroup: 101
+        fsGroup: 101
+      containers:
+        - name: httpupload
+          image: nginx:1.22-alpine-perl #privateregistry2/nginx-httpupload:test
+          imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsUser: 101
+            runAsGroup: 101
+            runAsNonRoot: true
+            privileged: false
+            capabilities:
+              drop: [ALL]
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          readinessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          volumeMounts:
+          - name: httpupload
+            mountPath: /http-upload
+          - name: httpupload-config
+            mountPath: /etc/nginx/nginx.conf
+            subPath: nginx.conf
+          - name: httpupload-config
+            mountPath: /etc/nginx/conf.d/default.conf
+            subPath: default.conf
+          - name: httpupload-config
+            mountPath: /usr/local/lib/perl5/site_perl/upload.pm
+            subPath: upload.pm
+          - name: tmpfs
+            mountPath: /nginx
+            subPath: nginx
+          - name: tmpfs
+            mountPath: /var/log/nginx
+            subPath: log
+      volumes:
+      - name: httpupload
+        persistentVolumeClaim:
+          claimName: httpupload
+      - name: httpupload-config
+        configMap:
+          name: httpupload-config
+      - name: tmpfs
+        emptyDir: {}
+          #medium: "Memory"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: httpupload
+  namespace: xmpp
+  labels:
+    app: httpupload
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: 8080
+      protocol: TCP
+      name: http
+  selector:
+    app: httpupload
